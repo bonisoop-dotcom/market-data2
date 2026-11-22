@@ -1,0 +1,44 @@
+name: market-data
+on:
+  schedule:
+    - cron: '20 21 * * 1-5'
+    - cron: '50 21 * * 1-5'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install yfinance requests
+      - name: fetch
+        run: |
+          python - <<'EOF'
+          import json, datetime, requests, yfinance as yf
+          out={"updated_utc":datetime.datetime.utcnow().isoformat()}
+          for t in ["SOXL","^IXIC","^SOX","^VIX","^GSPC"]:
+              try:
+                  h=yf.Ticker(t).history(period="15d",auto_adjust=False)
+                  out[t]=[{"date":str(i.date()),"close":round(float(r.Close),4),"low":round(float(r.Low),4),"high":round(float(r.High),4)} for i,r in h.iterrows()]
+              except Exception as e: out[t]=str(e)
+          for s in ["DGS2","BAMLH0A0HYM2","T5YIE","VIXCLS"]:
+              try:
+                  txt=requests.get(f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={s}",timeout=30).text.strip().split("\n")[-15:]
+                  out[s]=[l.split(",") for l in txt]
+              except Exception as e: out[s]=str(e)
+          try:
+              r=requests.get("https://production.dataviz.cnn.io/index/fearandgreed/graphdata",headers={"User-Agent":"Mozilla/5.0"},timeout=30).json()["fear_and_greed"]
+              out["fear_greed"]={"score":r["score"],"rating":r["rating"],"timestamp":r["timestamp"],"previous_close":r.get("previous_close")}
+          except Exception as e: out["fear_greed"]=str(e)
+          json.dump(out,open("data.json","w"),ensure_ascii=False,indent=1)
+          EOF
+      - run: |
+          git config user.name bot
+          git config user.email bot@users.noreply.github.com
+          git add data.json
+          git commit -m "data $(date -u +%F)" || echo nochange
+          git push
