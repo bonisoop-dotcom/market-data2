@@ -6,6 +6,9 @@ on:
   workflow_dispatch:
 permissions:
   contents: write
+concurrency:
+  group: market-data2
+  cancel-in-progress: false
 jobs:
   fetch:
     runs-on: ubuntu-latest
@@ -20,11 +23,16 @@ jobs:
           python - <<'EOF'
           import json, datetime, requests, yfinance as yf
           out={"updated_utc":datetime.datetime.utcnow().isoformat()}
+          import time
           for t in ["SOXL","^IXIC","^SOX","^VIX","^GSPC"]:
-              try:
-                  h=yf.Ticker(t).history(period="15d",auto_adjust=False)
-                  out[t]=[{"date":str(i.date()),"close":round(float(r.Close),4),"low":round(float(r.Low),4),"high":round(float(r.High),4)} for i,r in h.iterrows()]
-              except Exception as e: out[t]=str(e)
+              for k in range(4):
+                  try:
+                      h=yf.Ticker(t).history(period="15d",auto_adjust=False)
+                      if len(h)==0: raise RuntimeError("empty")
+                      out[t]=[{"date":str(i.date()),"close":round(float(r.Close),4),"low":round(float(r.Low),4),"high":round(float(r.High),4)} for i,r in h.iterrows()]
+                      break
+                  except Exception as e:
+                      out[t]=str(e); time.sleep(10*(k+1))
           for s in ["DGS2","BAMLH0A0HYM2","T5YIE","VIXCLS"]:
               try:
                   txt=requests.get(f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={s}",timeout=30).text.strip().split("\n")[-15:]
@@ -40,5 +48,10 @@ jobs:
           git config user.name bot
           git config user.email bot@users.noreply.github.com
           git add data.json
-          git commit -m "data $(date -u +%F)" || echo nochange
-          git push
+          git commit -m "data $(date -u +%F)" || { echo nochange; exit 0; }
+          for i in 1 2 3 4; do
+            git pull --rebase -X theirs -q && git push -q && exit 0
+            git rebase --abort 2>/dev/null || true
+            sleep $((i*5))
+          done
+          exit 1
